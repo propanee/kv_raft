@@ -29,7 +29,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
+	//LOG(rf.me, rf.currentTerm, DVote, "Sending RequestVote")
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
 
@@ -94,7 +94,7 @@ func (rf *Raft) startElection(term int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if !rf.contextLostLocked(Candidate, term) {
+	if rf.contextLostLocked(Candidate, term) {
 		LOG(rf.me, rf.currentTerm, DVote,
 			"Lost Candidate to %s, abort RequestVote", rf.state)
 		return
@@ -105,18 +105,19 @@ func (rf *Raft) startElection(term int) {
 			votes++
 			continue
 		}
-		go func(peer int) {
+		args := &RequestVoteArgs{
+			Term:         rf.currentTerm,
+			CondidateId:  rf.me,
+			LastLogIndex: len(rf.logs) - 1,
+			LastLogTerm:  0,
+		}
+		reply := &RequestVoteReply{}
+
+		go func(peer int, args *RequestVoteArgs, reply *RequestVoteReply) {
+			//LOG(rf.me, rf.currentTerm, DVote, "-> S%d, Ready to Send RequestVote", peer)
+			ok := rf.peers[peer].Call("Raft.RequestVote", args, reply)
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
-			args := &RequestVoteArgs{
-				Term:         rf.currentTerm,
-				CondidateId:  rf.me,
-				LastLogIndex: len(rf.logs) - 1,
-				LastLogTerm:  0,
-			}
-			reply := &RequestVoteReply{}
-			LOG(rf.me, rf.currentTerm, DVote, "-> S%d, Sending RequestVote", peer)
-			ok := rf.peers[peer].Call("Raft.RequestVote", args, reply)
 			if !ok {
 				LOG(rf.me, rf.currentTerm, DDebug,
 					"RPC error, For peer%d", peer)
@@ -130,7 +131,8 @@ func (rf *Raft) startElection(term int) {
 			// 判断状态是否已经被改变了
 			if rf.contextLostLocked(Candidate, term) {
 				LOG(rf.me, rf.currentTerm, DVote,
-					"-> S%d Lost context, abort RequestVote Reply", peer)
+					"-> S%d Lost Candidate[T%d] to %s[T%d], abort RequestVote Reply",
+					peer, term, rf.state, rf.currentTerm)
 				return
 			}
 
@@ -143,7 +145,7 @@ func (rf *Raft) startElection(term int) {
 				}
 			}
 			//cond.Broadcast()
-		}(peer)
+		}(peer, args, reply)
 
 		//if votes <= len(rf.peers)/2 {
 		//	cond.Wait()

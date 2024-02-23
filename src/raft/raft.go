@@ -110,7 +110,7 @@ func (rf *Raft) GetState() (int, bool) {
 
 // contextLostLocked 检查rf当前的状态是否已经被改变
 func (rf *Raft) contextLostLocked(state State, term int) bool {
-	return state == rf.state && term == rf.currentTerm
+	return !(state == rf.state && term == rf.currentTerm)
 }
 
 func (rf *Raft) toFollowerLocked(term int) {
@@ -119,7 +119,7 @@ func (rf *Raft) toFollowerLocked(term int) {
 		return
 	}
 
-	LOG(rf.me, rf.currentTerm, DLog, "%s->Follower, For T%s->T%s", rf.state, rf.currentTerm, term)
+	LOG(rf.me, rf.currentTerm, DLog, "%s->Follower, For T%d->T%d", rf.state, rf.currentTerm, term)
 	rf.state = Follower
 	if rf.currentTerm < term {
 		rf.currentTerm = term
