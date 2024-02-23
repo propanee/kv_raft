@@ -14,10 +14,10 @@ import "log"
 import "io/ioutil"
 import "sort"
 
-// for sorting by key.
+// ByKey for sorting by key.
 type ByKey []mr.KeyValue
 
-// for sorting by key.
+// Len for sorting by key.
 func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
