@@ -18,8 +18,6 @@ package raft
 //
 
 import (
-	//	"bytes"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,7 +47,6 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
-type LogEntry struct{}
 type State string
 
 const (
@@ -61,18 +58,8 @@ const (
 const (
 	electionTimeoutMin time.Duration = 150 * time.Millisecond
 	electionTimeoutMax time.Duration = 300 * time.Millisecond
-	replicateInterval  time.Duration = 200 * time.Millisecond
+	replicateInterval  time.Duration = 70 * time.Millisecond
 )
-
-func (rf *Raft) resetElectionTimerLocked() {
-	rf.electionTimeStart = time.Now()
-	timeoutRange := int64(electionTimeoutMax - electionTimeoutMin)
-	rf.electionTimeout = electionTimeoutMin + time.Duration(rand.Int63()%timeoutRange)
-}
-
-func (rf *Raft) isTimeoutLocked() bool {
-	return time.Since(rf.electionTimeStart) > rf.electionTimeout
-}
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
@@ -87,10 +74,13 @@ type Raft struct {
 	state       State
 	currentTerm int
 	votedFor    int
-	logs        []LogEntry
+
+	logs []LogEntry
 
 	commitIndex int
 	lastApplied int
+	applyCh     chan ApplyMsg
+	applyCond   *sync.Cond
 
 	nextIndex  []int
 	matchIndex []int
@@ -147,6 +137,11 @@ func (rf *Raft) toLeaderLocked() {
 	LOG(rf.me, rf.currentTerm, DLeader, "%s->Leader[T%d]", rf.state, rf.currentTerm)
 	rf.state = Leader
 	rf.votedFor = -1
+	for peer := 0; peer < len(rf.peers); peer++ {
+		rf.matchIndex[peer] = 0
+		rf.nextIndex[peer] = len(rf.logs)
+	}
+
 }
 
 // save Raft's persistent state to stable storage,
@@ -209,13 +204,24 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // Term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 	// Your code here (2B).
+	if rf.state != Leader {
+		return -1, -1, false
+	}
+	rf.logs = append(rf.logs, LogEntry{
+		CommandValid: true,
+		Command:      command,
+		Term:         rf.currentTerm,
+	})
+	index := len(rf.logs) - 1
+	LOG(rf.me, rf.currentTerm, DLeader, "Leader accept log [%d]T%d",
+		index, rf.currentTerm)
 
-	return index, term, isLeader
+	return index, rf.currentTerm, true
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -257,17 +263,24 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.state = Follower
 	rf.currentTerm = 0
 	rf.votedFor = -1
-	rf.logs = make([]LogEntry, 0)
+
+	// dummy Entry，避免一些边界条件的判定
+	rf.logs = append(rf.logs, LogEntry{})
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
+
+	// initialize the applyCh
+	rf.applyCh = applyCh
+	rf.applyCond = sync.NewCond(&rf.mu)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start electionTicker goroutine to start elections
 	go rf.electionTicker()
+	go rf.applicationTicker()
 
 	return rf
 }

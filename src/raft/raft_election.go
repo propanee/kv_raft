@@ -23,36 +23,61 @@ type RequestVoteReply struct {
 	VoteGranted bool
 }
 
+func (rf *Raft) resetElectionTimerLocked() {
+	rf.electionTimeStart = time.Now()
+	timeoutRange := int64(electionTimeoutMax - electionTimeoutMin)
+	rf.electionTimeout = electionTimeoutMin + time.Duration(rand.Int63()%timeoutRange)
+}
+
+func (rf *Raft) isElectionTimeoutLocked() bool {
+	return time.Since(rf.electionTimeStart) > rf.electionTimeout
+}
+
+func (rf *Raft) isMoreUpToDateLocked(candidateIndex, candidateTerm int) bool {
+	l := len(rf.logs)
+	lastIndex, lastTerm := l-1, rf.logs[l-1].Term
+
+	LOG(rf.me, rf.currentTerm, DVote, "Compare last log, Me:[%d]T%d, Candidate:[%d]T%d",
+		lastIndex, lastTerm, candidateIndex, candidateTerm)
+	if lastTerm != candidateTerm {
+		return lastTerm > candidateTerm
+	}
+	return lastIndex > candidateIndex
+
+}
+
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//LOG(rf.me, rf.currentTerm, DVote, "Sending RequestVote")
+	LOG(rf.me, rf.currentTerm, DVote, "Get RequestVote form %d", args.CondidateId)
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
 
 	if args.Term < rf.currentTerm {
-		LOG(rf.me, rf.currentTerm, DVote, "-> S%d, Reject voted, higher term, T%d>T%d",
+		LOG(rf.me, rf.currentTerm, DVote, "<- S%d, Reject, higher term, T%d>T%d",
 			args.CondidateId, rf.currentTerm, args.Term)
 		return
 	}
-
+	// 对齐Term
 	if args.Term > rf.currentTerm {
 		rf.toFollowerLocked(args.Term)
 	}
-
+	// 检查是否已经投票了
 	if rf.votedFor != -1 {
-		LOG(rf.me, rf.currentTerm, DVote, "-> S%d, Rejected, Already voted to S%d",
+		LOG(rf.me, rf.currentTerm, DVote, "<- S%d, Reject, Already voted to S%d",
 			args.CondidateId, rf.votedFor)
 		return
 	}
-
+	if rf.isMoreUpToDateLocked(args.LastLogIndex, args.LastLogTerm) {
+		LOG(rf.me, rf.currentTerm, DVote, "<- S%d, Reject, Candidate not up to date", args.CondidateId)
+		return
+	}
 	reply.VoteGranted = true
 	rf.votedFor = args.CondidateId
 	rf.resetElectionTimerLocked()
-	LOG(rf.me, rf.currentTerm, DVote, "-> S%d, Vote granted", args.CondidateId)
+	LOG(rf.me, rf.currentTerm, DVote, "<- S%d, Vote granted", args.CondidateId)
 
 }
 
@@ -105,16 +130,19 @@ func (rf *Raft) startElection(term int) {
 			votes++
 			continue
 		}
+		lastLogIndex := len(rf.logs) - 1
 		args := &RequestVoteArgs{
 			Term:         rf.currentTerm,
 			CondidateId:  rf.me,
-			LastLogIndex: len(rf.logs) - 1,
-			LastLogTerm:  0,
+			LastLogIndex: lastLogIndex,
+			LastLogTerm:  rf.logs[lastLogIndex].Term,
 		}
 		reply := &RequestVoteReply{}
 
 		go func(peer int, args *RequestVoteArgs, reply *RequestVoteReply) {
-			//LOG(rf.me, rf.currentTerm, DVote, "-> S%d, Ready to Send RequestVote", peer)
+			rf.mu.Lock()
+			LOG(rf.me, rf.currentTerm, DVote, "-> S%d, Send RequestVote", peer)
+			rf.mu.Unlock()
 			ok := rf.peers[peer].Call("Raft.RequestVote", args, reply)
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
@@ -131,7 +159,7 @@ func (rf *Raft) startElection(term int) {
 			// 判断状态是否已经被改变了
 			if rf.contextLostLocked(Candidate, term) {
 				LOG(rf.me, rf.currentTerm, DVote,
-					"-> S%d Lost Candidate[T%d] to %s[T%d], abort RequestVote Reply",
+					"<- S%d Lost Candidate[T%d] to %s[T%d], abort RequestVote Reply",
 					peer, term, rf.state, rf.currentTerm)
 				return
 			}
@@ -163,7 +191,8 @@ func (rf *Raft) electionTicker() {
 		// Check if a leader election should be started.
 
 		rf.mu.Lock()
-		if rf.state != Leader && rf.isTimeoutLocked() {
+		if rf.state != Leader && rf.isElectionTimeoutLocked() {
+
 			rf.toCandidateLocked()
 			go rf.startElection(rf.currentTerm)
 		}
