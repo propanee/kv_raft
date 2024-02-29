@@ -34,8 +34,7 @@ func (rf *Raft) isElectionTimeoutLocked() bool {
 }
 
 func (rf *Raft) isMoreUpToDateLocked(candidateIndex, candidateTerm int) bool {
-	l := len(rf.logs)
-	lastIndex, lastTerm := l-1, rf.logs[l-1].Term
+	lastIndex, lastTerm := rf.log.last()
 
 	LOG(rf.me, rf.currentTerm, DVote, "Compare last log, Me:[%d]T%d, Candidate:[%d]T%d",
 		lastIndex, lastTerm, candidateIndex, candidateTerm)
@@ -51,7 +50,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	LOG(rf.me, rf.currentTerm, DVote, "Get RequestVote form %d", args.CondidateId)
+	//LOG(rf.me, rf.currentTerm, DVote, "Get RequestVote form %d", args.CondidateId)
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
 
@@ -76,6 +75,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	reply.VoteGranted = true
 	rf.votedFor = args.CondidateId
+	rf.persist()
 	rf.resetElectionTimerLocked()
 	LOG(rf.me, rf.currentTerm, DVote, "<- S%d, Vote granted", args.CondidateId)
 
@@ -130,12 +130,13 @@ func (rf *Raft) startElection(term int) {
 			votes++
 			continue
 		}
-		lastLogIndex := len(rf.logs) - 1
+		lastIndex, lastTerm := rf.log.last()
+
 		args := &RequestVoteArgs{
 			Term:         rf.currentTerm,
 			CondidateId:  rf.me,
-			LastLogIndex: lastLogIndex,
-			LastLogTerm:  rf.logs[lastLogIndex].Term,
+			LastLogIndex: lastIndex,
+			LastLogTerm:  lastTerm,
 		}
 		reply := &RequestVoteReply{}
 

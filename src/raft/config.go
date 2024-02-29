@@ -44,7 +44,7 @@ type config struct {
 	net         *labrpc.Network
 	n           int
 	rafts       []*Raft
-	applyErr    []string // from apply channel readers
+	applyErr    []string // sliceFrom apply channel readers
 	connected   []bool   // whether each server is on the net
 	saved       []*Persister
 	endnames    [][]string            // the port file names each sends to
@@ -156,7 +156,7 @@ func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 	return err_msg, prevok
 }
 
-// applier reads message from apply ch and checks that they match the log
+// applier reads message sliceFrom apply ch and checks that they match the log
 // contents
 func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 	for m := range applyCh {
@@ -375,7 +375,7 @@ func (cfg *config) connect(i int) {
 	}
 }
 
-// detach server i from the net.
+// detach server i sliceFrom the net.
 func (cfg *config) disconnect(i int) {
 	// fmt.Printf("disconnect(%d)\n", i)
 
@@ -546,7 +546,7 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // entirely gives up after about 10 seconds.
 // indirectly checks that the servers agree on the
 // same value, since nCommitted() checks this,
-// as do the threads that read from applyCh.
+// as do the threads that read sliceFrom applyCh.
 // returns index.
 // if retry==true, may submit the command multiple
 // times, in case a leader fails just after Start().

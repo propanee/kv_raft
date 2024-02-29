@@ -28,6 +28,11 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
+
+	// PreLogIndex位置的Term
+	ConfilictTerm int
+	// 本地log中该Term最早出现的位置
+	ConfilictIndex int
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -46,26 +51,35 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Term >= rf.currentTerm {
 		rf.toFollowerLocked(args.Term)
 	}
+	defer rf.resetElectionTimerLocked()
 
 	// 如果preLog没有匹配上返回false
-	if args.PreLogIndex >= len(rf.logs) {
+	if args.PreLogIndex >= rf.log.size() {
 		LOG(rf.me, rf.currentTerm, DLog2, "<-  S%d, Reject log, Follower log too short, len:%d < Pre%d",
-			args.LeaderId, len(rf.logs), args.PreLogIndex)
+			args.LeaderId, rf.log.size(), args.PreLogIndex)
+		reply.ConfilictIndex = rf.log.size()
+		reply.ConfilictTerm = -1
 		return
 	}
 
-	if rf.logs[args.PreLogIndex].Term != args.PreLogTerm {
-		LOG(rf.me, rf.currentTerm, DLog2, "<-  S%d, Reject log, PreLog not match, [%d]: F[T%d] != L[T%d]",
-			args.LeaderId, args.PreLogIndex, rf.logs[args.PreLogIndex].Term, args.PreLogTerm)
+	if rf.log.at(args.PreLogIndex).Term != args.PreLogTerm {
+
+		reply.ConfilictTerm = rf.log.at(args.PreLogIndex).Term
+		reply.ConfilictIndex = rf.log.firstFor(rf.log.at(args.PreLogIndex).Term)
+
+		LOG(rf.me, rf.currentTerm, DLog2, "<-  S%d, Reject log, PreLog not match, "+
+			"[%d]: F[T%d] != L[T%d], Conflict [%d]T%d", args.LeaderId, args.PreLogIndex,
+			rf.log.at(args.PreLogIndex).Term, args.PreLogTerm, reply.ConfilictIndex, reply.ConfilictTerm)
+
 		return
 	}
 
 	// 将args中的entries加入本地
 	if len(args.Entries) > 0 {
-		rf.logs = append(rf.logs[:args.PreLogIndex+1], args.Entries...)
-		LOG(rf.me, rf.currentTerm, DLog2, "Follower accept logs: [%d,%d]",
+		rf.log.appendFrom(args.PreLogIndex, args.Entries)
+		LOG(rf.me, rf.currentTerm, DLog2, "Follower accept log: [%d,%d]",
 			args.PreLogIndex+1, args.PreLogIndex+len(args.Entries))
-
+		rf.persist()
 	}
 	reply.Success = true
 
@@ -76,8 +90,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.commitIndex = args.LeaderCommit
 		rf.applyCond.Signal()
 	}
-
-	rf.resetElectionTimerLocked()
 }
 
 // getMajorityLocked 获取大多数共识的index
@@ -105,8 +117,8 @@ func (rf *Raft) startReplication(term int) bool {
 	for peer := 0; peer < len(rf.peers); peer++ {
 		if peer == rf.me {
 			// leader也需要更新自己的MatchIndex便于驱动后续commit
-			rf.matchIndex[peer] = len(rf.logs) - 1
-			rf.nextIndex[peer] = len(rf.logs)
+			rf.matchIndex[peer] = rf.log.size() - 1
+			rf.nextIndex[peer] = rf.log.size()
 			continue
 		}
 		preLogIndex := rf.nextIndex[peer] - 1
@@ -114,8 +126,8 @@ func (rf *Raft) startReplication(term int) bool {
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
 			PreLogIndex:  preLogIndex,
-			PreLogTerm:   rf.logs[preLogIndex].Term,
-			Entries:      rf.logs[preLogIndex+1:],
+			PreLogTerm:   rf.log.at(preLogIndex).Term,
+			Entries:      rf.log.sliceFrom(preLogIndex + 1),
 			LeaderCommit: rf.commitIndex,
 		}
 		reply := &AppendEntriesReply{}
@@ -143,14 +155,29 @@ func (rf *Raft) startReplication(term int) bool {
 
 			// failed: probe the lower index if the preLog not matched
 			if !reply.Success {
-				idx := rf.nextIndex[peer] - 1
-				curTrem := rf.logs[idx].Term
-				for idx > 0 && rf.logs[idx].Term == curTrem {
-					idx--
+				preNext := rf.nextIndex[peer]
+				if reply.ConfilictTerm == InvalidTerm {
+					rf.nextIndex[peer] = reply.ConfilictIndex
+				} else {
+					firstTermIndex := rf.log.firstFor(reply.ConfilictTerm)
+					if firstTermIndex != InvalidIndex {
+						rf.nextIndex[peer] = firstTermIndex
+					} else {
+						rf.nextIndex[peer] = reply.ConfilictIndex
+					}
 				}
-				rf.nextIndex[peer] = idx + 1
-				LOG(rf.me, rf.currentTerm, DLog, "Not match at %d with S%d in next=%d[PreT%d], try next=%d[PreT%d]",
-					term, peer, args.PreLogIndex+1, args.PreLogTerm, rf.nextIndex[peer], rf.logs[idx].Term)
+				// 避免乱序
+				if rf.nextIndex[peer] > preNext {
+					rf.nextIndex[peer] = preNext
+				}
+				//idx := rf.nextIndex[peer] - 1
+				//curTrem := rf.log[idx].Term
+				//for idx > 0 && rf.log[idx].Term == curTrem {
+				//	idx--
+				//}
+				//rf.nextIndex[peer] = idx + 1
+				LOG(rf.me, rf.currentTerm, DLog, "<-  S%d, Not match in next=%d[PreT%d], try next=%d[PreT%d]",
+					peer, args.PreLogIndex+1, args.PreLogTerm, rf.nextIndex[peer], rf.log.at(rf.nextIndex[peer]-1).Term)
 				return
 			}
 
@@ -160,6 +187,11 @@ func (rf *Raft) startReplication(term int) bool {
 
 			// 将大多数共识的下标作为commitIndex，并通知apply
 			majorityMatched := rf.getMajorityLocked()
+			if rf.log.at(majorityMatched).Term != rf.currentTerm {
+				LOG(rf.me, rf.currentTerm, DApply, "Majority %d[T%d] not match current T%d",
+					majorityMatched, rf.log.at(majorityMatched).Term, rf.currentTerm)
+				return
+			}
 			if majorityMatched > rf.commitIndex {
 				LOG(rf.me, rf.currentTerm, DApply, "Leader update the commit index %d->%d",
 					rf.commitIndex, majorityMatched)

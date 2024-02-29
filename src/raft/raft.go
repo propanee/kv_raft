@@ -56,6 +56,11 @@ const (
 )
 
 const (
+	InvalidIndex = 0
+	InvalidTerm  = 0
+)
+
+const (
 	electionTimeoutMin time.Duration = 150 * time.Millisecond
 	electionTimeoutMax time.Duration = 300 * time.Millisecond
 	replicateInterval  time.Duration = 70 * time.Millisecond
@@ -75,7 +80,7 @@ type Raft struct {
 	currentTerm int
 	votedFor    int
 
-	logs []LogEntry
+	log *RaftLog
 
 	commitIndex int
 	lastApplied int
@@ -114,6 +119,7 @@ func (rf *Raft) toFollowerLocked(term int) {
 	if rf.currentTerm < term {
 		rf.currentTerm = term
 		rf.votedFor = -1
+		rf.persist()
 	}
 }
 
@@ -126,6 +132,7 @@ func (rf *Raft) toCandidateLocked() {
 	LOG(rf.me, rf.currentTerm, DVote, "%s->Candidate[T%d]", rf.state, rf.currentTerm+1)
 	rf.currentTerm++
 	rf.votedFor = rf.me
+	rf.persist()
 	rf.state = Candidate
 }
 
@@ -137,49 +144,12 @@ func (rf *Raft) toLeaderLocked() {
 	LOG(rf.me, rf.currentTerm, DLeader, "%s->Leader[T%d]", rf.state, rf.currentTerm)
 	rf.state = Leader
 	rf.votedFor = -1
+	rf.persist()
 	for peer := 0; peer < len(rf.peers); peer++ {
 		rf.matchIndex[peer] = 0
-		rf.nextIndex[peer] = len(rf.logs)
+		rf.nextIndex[peer] = rf.log.size()
 	}
 
-}
-
-// save Raft's persistent state to stable storage,
-// where it can later be retrieved after a crash and restart.
-// see paper's Figure 2 for a description of what should be persistent.
-// before you've implemented snapshots, you should pass nil as the
-// second argument to persister.Save().
-// after you've implemented snapshots, pass the current snapshot
-// (or nil if there's not yet a snapshot).
-func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// raftstate := w.Bytes()
-	// rf.persister.Save(raftstate, nil)
-}
-
-// restore previously persisted state.
-func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
-		return
-	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
 }
 
 // the service says it has created a snapshot that has
@@ -188,6 +158,12 @@ func (rf *Raft) readPersist(data []byte) {
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.log.doSnapshot(index, snapshot)
+	rf.persist()
 
 }
 
@@ -212,16 +188,16 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	if rf.state != Leader {
 		return -1, -1, false
 	}
-	rf.logs = append(rf.logs, LogEntry{
+	rf.log.append(LogEntry{
 		CommandValid: true,
 		Command:      command,
 		Term:         rf.currentTerm,
 	})
-	index := len(rf.logs) - 1
+	rf.persist()
 	LOG(rf.me, rf.currentTerm, DLeader, "Leader accept log [%d]T%d",
-		index, rf.currentTerm)
+		rf.log.size()-1, rf.currentTerm)
 
-	return index, rf.currentTerm, true
+	return rf.log.size() - 1, rf.currentTerm, true
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -236,6 +212,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
+	LOG(rf.me, rf.currentTerm, DDebug, "Crash!")
 }
 
 func (rf *Raft) killed() bool {
@@ -261,11 +238,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.state = Follower
-	rf.currentTerm = 0
+	rf.currentTerm = 1
 	rf.votedFor = -1
 
 	// dummy Entry，避免一些边界条件的判定
-	rf.logs = append(rf.logs, LogEntry{})
+	//rf.log = append(rf.log, LogEntry{Term: InvalidTerm})
+	rf.log = NewLog(InvalidIndex, InvalidTerm, nil, nil)
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, len(peers))
@@ -275,7 +253,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 	rf.applyCond = sync.NewCond(&rf.mu)
 
-	// initialize from state persisted before a crash
+	// initialize sliceFrom state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start electionTicker goroutine to start elections

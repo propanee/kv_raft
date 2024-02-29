@@ -4,12 +4,10 @@ func (rf *Raft) applicationTicker() {
 	for !rf.killed() {
 
 		rf.mu.Lock()
-		LOG(rf.me, rf.currentTerm, DVote, "Try application")
-		rf.applyCond.Wait() //一般情况下，在这里释放锁，在接收到Signal信号时再获取锁
-		LOG(rf.me, rf.currentTerm, DVote, "Try application2")
+		rf.applyCond.Wait() //一般情况下，在这里释放锁，在接收到Signal信号时再
 		entries := make([]LogEntry, 0)
 		for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-			entries = append(entries, rf.logs[i])
+			entries = append(entries, rf.log.at(i))
 		}
 		rf.mu.Unlock()
 		// 先锁住取数据，再放入applyCh，避免应用层apply一致占用锁

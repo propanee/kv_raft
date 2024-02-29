@@ -83,7 +83,7 @@ func TestReElection2A(t *testing.T) {
 	cfg.connect((leader2 + 1) % servers)
 	cfg.checkOneLeader()
 
-	// re-join of last node shouldn't prevent leader from existing.
+	// re-join of last node shouldn't prevent leader sliceFrom existing.
 	cfg.connect(leader2)
 	cfg.checkOneLeader()
 
@@ -189,7 +189,7 @@ func TestFollowerFailure2B(t *testing.T) {
 
 	cfg.one(101, servers, false)
 
-	// disconnect one follower from the network.
+	// disconnect one follower sliceFrom the network.
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect((leader1 + 1) % servers)
 
@@ -275,7 +275,7 @@ func TestFailAgree2B(t *testing.T) {
 
 	cfg.one(101, servers, false)
 
-	// disconnect one follower from the network.
+	// disconnect one follower sliceFrom the network.
 	leader := cfg.checkOneLeader()
 	cfg.disconnect((leader + 1) % servers)
 
@@ -335,7 +335,7 @@ func TestFailNoAgree2B(t *testing.T) {
 	cfg.connect((leader + 2) % servers)
 	cfg.connect((leader + 3) % servers)
 
-	// the disconnected majority may have chosen a leader from
+	// the disconnected majority may have chosen a leader sliceFrom
 	// among their own ranks, forgetting index 2.
 	leader2 := cfg.checkOneLeader()
 	index2, _, ok2 := cfg.rafts[leader2].Start(30)
@@ -495,7 +495,7 @@ func TestBackup2B(t *testing.T) {
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
 
-	cfg.begin("Test (2B): leader backs up quickly over incorrect follower logs")
+	cfg.begin("Test (2B): leader backs up quickly over incorrect follower log")
 
 	cfg.one(rand.Int(), servers, true)
 
@@ -1033,7 +1033,7 @@ func internalChurn(t *testing.T, unreliable bool) {
 
 		// Make crash/restart infrequent enough that the peers can often
 		// keep up, but not so infrequent that everything has settled
-		// down from one change to the next. Pick a value smaller than
+		// down sliceFrom one change to the next. Pick a value smaller than
 		// the election timeout, but not hugely smaller.
 		time.Sleep((RaftElectionTimeout * 7) / 10)
 	}
@@ -1217,7 +1217,7 @@ func TestSnapshotAllCrash2D(t *testing.T) {
 
 		index2 := cfg.one(rand.Int(), servers, true)
 		if index2 < index1+1 {
-			t.Fatalf("index decreased from %v to %v", index1, index2)
+			t.Fatalf("index decreased sliceFrom %v to %v", index1, index2)
 		}
 	}
 	cfg.end()
