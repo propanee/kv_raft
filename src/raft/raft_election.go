@@ -144,7 +144,7 @@ func (rf *Raft) startElection(term int) {
 			rf.mu.Lock()
 			LOG(rf.me, rf.currentTerm, DVote, "-> S%d, Send RequestVote", peer)
 			rf.mu.Unlock()
-			ok := rf.peers[peer].Call("Raft.RequestVote", args, reply)
+			ok := rf.sendRequestVote(peer, args, reply)
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 			if !ok {

@@ -103,6 +103,11 @@ func (rf *Raft) getMajorityLocked() int {
 	return tmp[majorityIdx]
 }
 
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
 // 只在给定的term有效
 func (rf *Raft) startReplication(term int) bool {
 
@@ -122,6 +127,13 @@ func (rf *Raft) startReplication(term int) bool {
 			continue
 		}
 		preLogIndex := rf.nextIndex[peer] - 1
+		// 要发送的日志已经被截断了
+		// 由于有一个mock保存了snapLastIdx的term，所以在preLogIndex处也是可以取到term的
+		if preLogIndex < rf.log.snapLastIdx {
+			rf.startInstallSnapshot(peer, term)
+			continue
+		}
+
 		args := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
@@ -133,7 +145,7 @@ func (rf *Raft) startReplication(term int) bool {
 		reply := &AppendEntriesReply{}
 
 		go func(peer int, args *AppendEntriesArgs, reply *AppendEntriesReply) {
-			ok := rf.peers[peer].Call("Raft.AppendEntries", args, reply)
+			ok := rf.sendAppendEntries(peer, args, reply)
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 			if !ok {
@@ -148,7 +160,7 @@ func (rf *Raft) startReplication(term int) bool {
 
 			//如果现在不是Leader了，就不应该在往下处理reply了
 			if rf.contextLostLocked(Leader, term) {
-				LOG(rf.me, rf.currentTerm, DLog, "Lost Leader[T%d] to %s[T%d], abort ",
+				LOG(rf.me, rf.currentTerm, DLog, "Lost Leader[T%d] to %s[T%d], abort replication",
 					term, rf.state, rf.currentTerm)
 				return
 			}
@@ -176,8 +188,12 @@ func (rf *Raft) startReplication(term int) bool {
 				//	idx--
 				//}
 				//rf.nextIndex[peer] = idx + 1
+				tryAgainPreTerm := InvalidTerm
+				if rf.nextIndex[peer]-1 >= rf.log.snapLastIdx {
+					tryAgainPreTerm = rf.log.at(rf.nextIndex[peer] - 1).Term
+				}
 				LOG(rf.me, rf.currentTerm, DLog, "<-  S%d, Not match in next=%d[PreT%d], try next=%d[PreT%d]",
-					peer, args.PreLogIndex+1, args.PreLogTerm, rf.nextIndex[peer], rf.log.at(rf.nextIndex[peer]-1).Term)
+					peer, args.PreLogIndex+1, args.PreLogTerm, rf.nextIndex[peer], tryAgainPreTerm)
 				return
 			}
 

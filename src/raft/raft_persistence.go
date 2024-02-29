@@ -30,7 +30,7 @@ func (rf *Raft) persist() {
 	rf.log.Persist(e)
 
 	raftstate := w.Bytes()
-	rf.persister.Save(raftstate, nil)
+	rf.persister.Save(raftstate, rf.log.snapshot)
 
 	s := fmt.Sprintf("T%d, VotedFor: %d, %s", rf.currentTerm, rf.votedFor, rf.log.String())
 	LOG(rf.me, rf.currentTerm, DPersist, "Save to disc: %v", s)
@@ -74,6 +74,14 @@ func (rf *Raft) readPersist(data []byte) {
 
 	if err := rf.log.readPersist(d); err != nil {
 		LOG(rf.me, rf.currentTerm, DPersist, "Read log error: %v", err)
+	}
+
+	rf.log.snapshot = rf.persister.ReadSnapshot()
+
+	// ReadSnapshot()已经把snapshot都应用到应用层了
+	if rf.log.snapLastIdx > rf.commitIndex {
+		rf.commitIndex = rf.log.snapLastIdx
+		rf.lastApplied = rf.commitIndex
 	}
 
 	s := fmt.Sprintf("T%d, VotedFor: %d, %v", rf.currentTerm, rf.votedFor, rf.log.String())

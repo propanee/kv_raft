@@ -68,7 +68,7 @@ func (rl *RaftLog) size() int {
 
 func (rl *RaftLog) idx(logicIdx int) int {
 	if logicIdx < rl.snapLastIdx || logicIdx > rl.size() {
-		panic(fmt.Sprintf("%d is out of [%d., %d]", rl.snapLastIdx, rl.size()-1))
+		panic(fmt.Sprintf("%d is out of [%d., %d]", logicIdx, rl.snapLastIdx, rl.size()-1))
 	}
 	// [snapLastIdx, size()-1]
 	return logicIdx - rl.snapLastIdx
@@ -122,6 +122,7 @@ func (rl *RaftLog) appendFrom(logicPrevIdx int, entries []LogEntry) {
 	rl.tailLog = append(rl.tailLog[:rl.idx(logicPrevIdx)+1], entries...)
 }
 
+// do checkpoint from the applier
 func (rl *RaftLog) doSnapshot(index int, snapshot []byte) {
 	idx := rl.idx(index)
 
@@ -136,4 +137,20 @@ func (rl *RaftLog) doSnapshot(index int, snapshot []byte) {
 		Term: rl.snapLastTerm,
 	})
 	newLog = append(newLog, rl.tailLog[idx+1:]...)
+	rl.tailLog = newLog
+}
+
+// install snapshot from the leader
+func (rl *RaftLog) installSnapshot(index, term int, snapshot []byte) {
+	rl.snapLastIdx = index
+	rl.snapLastTerm = term
+	rl.snapshot = snapshot
+
+	//make a new log array
+	//如果直接用rl.tailLog[idx+1:]并没有改变底层的数组，无法gc
+	newLog := make([]LogEntry, 0, 1)
+	newLog = append(newLog, LogEntry{
+		Term: rl.snapLastTerm,
+	})
+	rl.tailLog = newLog
 }
