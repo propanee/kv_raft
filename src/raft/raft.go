@@ -63,7 +63,7 @@ const (
 const (
 	electionTimeoutMin time.Duration = 150 * time.Millisecond
 	electionTimeoutMax time.Duration = 300 * time.Millisecond
-	replicateInterval  time.Duration = 70 * time.Millisecond
+	replicateInterval  time.Duration = 30 * time.Millisecond
 )
 
 // A Go object implementing a single Raft peer.
@@ -102,6 +102,12 @@ func (rf *Raft) GetState() (int, bool) {
 	defer rf.mu.Unlock()
 	// Your code here (2A).
 	return rf.currentTerm, rf.state == Leader
+}
+
+func (rf *Raft) GetRaftState() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.persister.RaftStateSize()
 }
 
 // contextLostLocked 检查rf当前的状态是否已经被改变
@@ -165,6 +171,7 @@ func (rf *Raft) toLeaderLocked() {
 // if it's ever committed. the second return value is the current
 // Term. the third return value is true if this server believes it is
 // the leader.
+// 用于接收外部请求
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	rf.mu.Lock()
