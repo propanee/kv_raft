@@ -52,7 +52,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 	//等待结果 todo
 	kv.mu.Lock()
-	notifyCh := kv.getNotifyChannel(index)
+	notifyCh := kv.makeNotifyChannel(index)
 	kv.mu.Unlock()
 
 	select {
@@ -105,11 +105,13 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	//等待结果 todo
 	kv.mu.Lock()
-	notifyCh := kv.getNotifyChannel(index)
+	notifyCh := kv.makeNotifyChannel(index)
 	kv.mu.Unlock()
 
 	select {
 	case result := <-notifyCh:
+		raft.LOG(kv.me, -1, raft.DServer, "Apply %s K%s V%s SUCCESS!, Err: %s",
+			args.Op, args.Key, args.Value, result.Err)
 		reply.Err = result.Err
 	case <-time.After(ClientRequestTimeout):
 		reply.Err = ErrTimeout
@@ -186,6 +188,8 @@ func (kv *KVServer) applyTask() {
 		case message := <-kv.applyCh:
 			if message.CommandValid {
 				kv.mu.Lock()
+				raft.LOG(kv.me, -1, raft.DServer, "Applying %s commandIdx %d",
+					message.Command.(Op).string(), message.CommandIndex)
 				// 如果已经处理过了就直接忽略
 				if message.CommandIndex <= kv.lastApplied {
 					kv.mu.Unlock()
@@ -210,9 +214,12 @@ func (kv *KVServer) applyTask() {
 				}
 
 				// 将请求结果发送
+				raft.LOG(kv.me, -1, raft.DServer, "Applying %s ready to send", message.Command.(Op).string())
 				if _, isLeader := kv.rf.GetState(); isLeader {
-					notifyCh := kv.getNotifyChannel(message.CommandIndex)
-					notifyCh <- opReply
+					if notifyCh, ok := kv.notifyChans[message.CommandIndex]; ok {
+						notifyCh <- opReply
+						raft.LOG(kv.me, -1, raft.DServer, "Apply %s SUCCESS!", message.Command.(Op).string())
+					}
 				}
 
 				// 判断是否需要snapshot
@@ -249,10 +256,11 @@ func (kv *KVServer) applyToStateMachine(op Op) *OpReply {
 	}
 }
 
-func (kv *KVServer) getNotifyChannel(index int) chan *OpReply {
+func (kv *KVServer) makeNotifyChannel(index int) chan *OpReply {
 	if _, ok := kv.notifyChans[index]; !ok {
 		kv.notifyChans[index] = make(chan *OpReply)
 	}
+	raft.LOG(kv.me, -1, raft.DServer, "makeNotifyChan idx%d", index)
 	return kv.notifyChans[index]
 }
 
@@ -264,7 +272,12 @@ func (kv *KVServer) makeSnapshot(index int) {
 	buf := new(bytes.Buffer)
 	enc := labgob.NewEncoder(buf)
 	_ = enc.Encode(kv.stateMachine)
+	if enc.Encode(kv.stateMachine) != nil {
+		panic("Failed to encode stateMachine state from snapshot")
+	}
+
 	_ = enc.Encode(kv.duplicateTable)
+	raft.LOG(kv.me, -1, raft.DServer, "makeSnapshot idx%d", index)
 	kv.rf.Snapshot(index, buf.Bytes())
 }
 
@@ -273,12 +286,16 @@ func (kv *KVServer) restoreFromSnapshot(snapshot []byte) {
 		return
 	}
 
-	buf := new(bytes.Buffer)
+	buf := bytes.NewBuffer(snapshot)
 	dec := labgob.NewDecoder(buf)
 	var stateMachine MemoryKVStateMachine
 	var dupTable map[int64]LastOperationInfo
-	if dec.Decode(&stateMachine) != nil || dec.Decode(&dupTable) != nil {
-		panic("Failed to restore state from snapshot")
+	dec.Decode(&stateMachine)
+	if dec.Decode(&stateMachine) != nil {
+		panic("Failed to restore stateMachine state from snapshot")
+	}
+	if dec.Decode(&dupTable) != nil {
+		panic("Failed to restore dupTable state from snapshot")
 	}
 	kv.stateMachine = &stateMachine
 	kv.duplicateTable = dupTable

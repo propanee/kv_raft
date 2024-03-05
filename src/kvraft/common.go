@@ -53,17 +53,21 @@ type Op struct {
 	SeqId    int64
 }
 
+func (op Op) string() string {
+	return fmt.Sprintf("%s: K %s V %s", op.OpType, op.Key, op.Value)
+}
+
 type OpReply struct {
 	Value string
 	Err   Err
 }
 
-type OperationType uint8
+type OperationType string
 
 const (
-	OpGet OperationType = iota
-	OpPut
-	OpAppend
+	OpGet    OperationType = "Get"
+	OpPut                  = "Put"
+	OpAppend               = "Append"
 )
 
 func getOpType(v string) OperationType {

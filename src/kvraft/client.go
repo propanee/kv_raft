@@ -1,6 +1,10 @@
 package kvraft
 
-import "6.5840/labrpc"
+import (
+	"6.5840/labrpc"
+	"6.5840/raft"
+	"time"
+)
 import "crypto/rand"
 import "math/big"
 
@@ -49,14 +53,18 @@ func (ck *Clerk) Get(key string) string {
 
 	for {
 		reply := GetReply{}
-
+		raft.LOG(int(ck.clientId)%100, -1, raft.DClient, "-> S%d getting key %s\n", ck.leaderId, args.Key)
 		ok := ck.servers[ck.leaderId].Call("KVServer.Get", &args, &reply)
 		if !ok || reply.Err == ErrWrongLeader || reply.Err == ErrTimeout {
 			// 请求失败换一个节点重试
+			raft.LOG(int(ck.clientId)%100, -1, raft.DClient, "-> S%d getting %s Error: %s",
+				ck.leaderId, args.Key, reply.Err)
 			ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
 			continue
 		}
 		// 调用成功返回value
+		raft.LOG(int(ck.clientId)%100, -1, raft.DClient,
+			"-> S%d getted key %s : v %s\n", ck.leaderId, args.Key, reply.Value)
 		return reply.Value
 	}
 }
@@ -81,14 +89,21 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 	for {
 		reply := PutAppendReply{}
+		raft.LOG(int(ck.clientId)%100, -1, raft.DClient, "-> S%d:%sing to Key%s, Value%s\n",
+			ck.leaderId, args.Op, string(key), value)
 		ok := ck.servers[ck.leaderId].Call("KVServer.PutAppend", &args, &reply)
 		if !ok || reply.Err == ErrWrongLeader || reply.Err == ErrTimeout {
 			// 请求失败换一个节点重试
+			raft.LOG(int(ck.clientId)%100, -1, raft.DClient, "-> S%d: %sing,Key%s, Value%s Error:%s\n",
+				ck.leaderId, args.Op, string(key), value, reply.Err)
 			ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
+			time.Sleep(10 * time.Millisecond)
 			continue
 		}
 		// 调用成功返回value
 		ck.seqId++
+		raft.LOG(int(ck.clientId)%100, -1, raft.DClient, "-> S%d: %sed: Key%s, Value%s\n",
+			ck.leaderId, args.Op, key, value)
 		return
 
 	}

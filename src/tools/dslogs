@@ -31,6 +31,7 @@ TOPICS = {
     "TEST": "#fe2c79",
     "TRCE": "#fe2626",
     "APLY": "#696773",
+    "SERV": "#9a9a99",
 }
 # fmt: on
 
@@ -81,7 +82,13 @@ def main(
             # any particular peer. Otherwise we can treat second column
             # as peer id
             if topic != "TEST":
-                i = int(msg[1])
+                if msg[0] == 'S':
+                    i = int(msg[1])
+                elif msg[0] == 'C':
+                    i = 5
+                else:
+                    i = 6
+
 
             # Colorize output by using rich syntax when needed
             if colorize and topic in TOPICS:

@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"sort"
 	"time"
 )
@@ -23,6 +24,10 @@ type AppendEntriesArgs struct {
 
 	// used to update the follower's commitIndex
 	LeaderCommit int
+}
+
+func (args *AppendEntriesArgs) String() string {
+	return fmt.Sprintf("PreIdx %d, PreTerm %d", args.PreLogIndex, args.PreLogTerm)
 }
 
 type AppendEntriesReply struct {
@@ -58,10 +63,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		LOG(rf.me, rf.currentTerm, DLog2, "<-  S%d, Reject log, Follower log too short, len:%d < Pre%d",
 			args.LeaderId, rf.log.size(), args.PreLogIndex)
 		reply.ConfilictIndex = rf.log.size()
-		reply.ConfilictTerm = -1
+		reply.ConfilictTerm = InvalidTerm
 		return
 	}
-
+	// 如果reply对方没有收到，而已经apply了
+	if args.PreLogIndex < rf.lastApplied {
+		reply.ConfilictIndex = rf.lastApplied
+		reply.ConfilictTerm = InvalidTerm
+		return
+	}
 	if rf.log.at(args.PreLogIndex).Term != args.PreLogTerm {
 
 		reply.ConfilictTerm = rf.log.at(args.PreLogIndex).Term
@@ -145,6 +155,7 @@ func (rf *Raft) startReplication(term int) bool {
 		reply := &AppendEntriesReply{}
 
 		go func(peer int, args *AppendEntriesArgs, reply *AppendEntriesReply) {
+			LOG(rf.me, rf.currentTerm, DLog, "-> S%d, appendEntries: %s", peer, args.String())
 			ok := rf.sendAppendEntries(peer, args, reply)
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
@@ -169,7 +180,12 @@ func (rf *Raft) startReplication(term int) bool {
 			if !reply.Success {
 				preNext := rf.nextIndex[peer]
 				if reply.ConfilictTerm == InvalidTerm {
-					rf.nextIndex[peer] = reply.ConfilictIndex
+					if reply.ConfilictIndex <= rf.matchIndex[peer] {
+						rf.nextIndex[peer] = reply.ConfilictIndex
+					} else {
+						rf.matchIndex[peer] = reply.ConfilictIndex // 不要用本地logs赋值，因为可能在RPC过程中有新的Log
+						rf.nextIndex[peer] = rf.matchIndex[peer] + 1
+					}
 				} else {
 					firstTermIndex := rf.log.firstFor(reply.ConfilictTerm)
 					if firstTermIndex != InvalidIndex {
@@ -198,11 +214,16 @@ func (rf *Raft) startReplication(term int) bool {
 			}
 
 			// success: update match/next index
-			rf.matchIndex[peer] = args.PreLogIndex + len(args.Entries) // 不要用本地logs赋值，因为可能在RPC过程中有新的Log
-			rf.nextIndex[peer] = rf.matchIndex[peer] + 1
+			if args.PreLogIndex+len(args.Entries) > rf.matchIndex[peer] {
+				rf.matchIndex[peer] = args.PreLogIndex + len(args.Entries) // 不要用本地logs赋值，因为可能在RPC过程中有新的Log
+				rf.nextIndex[peer] = rf.matchIndex[peer] + 1
+			}
 
 			// 将大多数共识的下标作为commitIndex，并通知apply
 			majorityMatched := rf.getMajorityLocked()
+			if majorityMatched == InvalidIndex || majorityMatched < rf.log.snapLastIdx {
+				return
+			}
 			if rf.log.at(majorityMatched).Term != rf.currentTerm {
 				LOG(rf.me, rf.currentTerm, DApply, "Majority %d[T%d] not match current T%d",
 					majorityMatched, rf.log.at(majorityMatched).Term, rf.currentTerm)

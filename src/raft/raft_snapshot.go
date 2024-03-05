@@ -11,7 +11,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
 	rf.log.doSnapshot(index, snapshot)
 	rf.persist()
 

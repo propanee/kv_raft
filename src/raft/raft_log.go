@@ -13,7 +13,7 @@ type RaftLog struct {
 	snapshot []byte
 
 	// contains index [snapLastIdx +1 , snapLastIdx+len(tailLog)-1)
-	// contains index snapLastIdx for mick log entry
+	// contains index snapLastIdx for mock log entry
 	tailLog []LogEntry
 }
 
@@ -101,6 +101,10 @@ func (rl *RaftLog) firstFor(term int) int {
 	return InvalidIndex
 }
 
+func (rl *RaftLog) firstIndex() int {
+	return rl.tailLog[0].CommandIndex
+}
+
 func (rl *RaftLog) String() string {
 	return fmt.Sprintf("Logs [%d:%d], Terms %v",
 		rl.snapLastIdx, rl.size(), rl.getLogTerms())
@@ -134,7 +138,8 @@ func (rl *RaftLog) doSnapshot(index int, snapshot []byte) {
 	//如果直接用rl.tailLog[idx+1:]并没有改变底层的数组，无法gc
 	newLog := make([]LogEntry, 0, rl.size()-rl.snapLastIdx)
 	newLog = append(newLog, LogEntry{
-		Term: rl.snapLastTerm,
+		Term:         rl.snapLastTerm,
+		CommandIndex: rl.snapLastIdx,
 	})
 	newLog = append(newLog, rl.tailLog[idx+1:]...)
 	rl.tailLog = newLog
@@ -150,7 +155,8 @@ func (rl *RaftLog) installSnapshot(index, term int, snapshot []byte) {
 	//如果直接用rl.tailLog[idx+1:]并没有改变底层的数组，无法gc
 	newLog := make([]LogEntry, 0, 1)
 	newLog = append(newLog, LogEntry{
-		Term: rl.snapLastTerm,
+		Term:         rl.snapLastTerm,
+		CommandIndex: rl.snapLastIdx,
 	})
 	rl.tailLog = newLog
 }
